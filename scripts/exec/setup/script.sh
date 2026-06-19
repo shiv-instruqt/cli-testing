@@ -1,41 +1,62 @@
 #!/bin/bash
-set -e
-
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release
+apt-get install -y python3 python3-pip python3-venv nano
 
-mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-  gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+cd /root
 
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-  https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | \
-  tee /etc/apt/sources.list.d/docker.list > /dev/null
+python3 -m venv .venv
+source .venv/bin/activate
 
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+pip install flask requests
 
-systemctl enable docker || true
-systemctl start docker || true
+cat > /root/app.py << 'PYEOF'
+from flask import Flask, jsonify
+import socket
+import requests
 
-until docker info > /dev/null 2>&1; do
-    echo "Waiting for Docker daemon..."
-    sleep 2
-done
+app = Flask(__name__)
 
-docker pull shivtushal/git-lab:python-app-1.0
+def get_private_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "unavailable"
 
-docker stop flask-app 2>/dev/null || true
-docker rm flask-app 2>/dev/null || true
+def get_public_ip():
+    try:
+        return requests.get("https://api.ipify.org", timeout=5).text
+    except Exception:
+        return "unavailable"
 
-docker run -d \
-  --name flask-app \
-  --restart unless-stopped \
-  -p 5000:5000 \
-  shivtushal/git-lab:python-app-1.0
+@app.route("/")
+def index():
+    return f"""
+    <h1>Year Converter</h1>
+    <p>Private IP: {get_private_ip()}</p>
+    <p>Public IP: {get_public_ip()}</p>
+    """
 
-echo "Setup complete. Flask app running on port 5000."
+@app.route("/api/server-info")
+def server_info():
+    return jsonify({
+        "private_ip": get_private_ip(),
+        "public_ip": get_public_ip()
+    })
+
+if __name__ == "__main__":
+    private_ip = get_private_ip()
+    public_ip = get_public_ip()
+    print(f"[Server] Private IP : {private_ip}")
+    print(f"[Server] Public  IP : {public_ip}")
+    app.run(host="0.0.0.0", port=5000)
+PYEOF
+
+nohup /root/.venv/bin/python /root/app.py > /var/log/flask-app.log 2>&1 &
+
+exit 0
